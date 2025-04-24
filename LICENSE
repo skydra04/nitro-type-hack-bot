@@ -1,121 +1,454 @@
-Creative Commons Legal Code
+local Workspace           = game:GetService("Workspace")
+local Players             = game:GetService("Players")
+local RunService          = game:GetService("RunService")
+local UserInputService    = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
-CC0 1.0 Universal
+local localPlayer      = Players.LocalPlayer
+local character        = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
 
-    CREATIVE COMMONS CORPORATION IS NOT A LAW FIRM AND DOES NOT PROVIDE
-    LEGAL SERVICES. DISTRIBUTION OF THIS DOCUMENT DOES NOT CREATE AN
-    ATTORNEY-CLIENT RELATIONSHIP. CREATIVE COMMONS PROVIDES THIS
-    INFORMATION ON AN "AS-IS" BASIS. CREATIVE COMMONS MAKES NO WARRANTIES
-    REGARDING THE USE OF THIS DOCUMENT OR THE INFORMATION OR WORKS
-    PROVIDED HEREUNDER, AND DISCLAIMS LIABILITY FOR DAMAGES RESULTING FROM
-    THE USE OF THIS DOCUMENT OR THE INFORMATION OR WORKS PROVIDED
-    HEREUNDER.
+---------------------------------------------------
+-- Configuration
+---------------------------------------------------
+local maxHighlightDistance     = 500
+local localDimDistance         = 15
+local localFullDistance        = 30
+local entityProximityThreshold = 30
+local survivalTeleportDistance = 50
 
-Statement of Purpose
+---------------------------------------------------
+-- Remember which models were in Entities
+---------------------------------------------------
+local storedEntityNames = {}
 
-The laws of most jurisdictions throughout the world automatically confer
-exclusive Copyright and Related Rights (defined below) upon the creator
-and subsequent owner(s) (each and all, an "owner") of an original work of
-authorship and/or a database (each, a "Work").
+---------------------------------------------------
+-- ElevatorSpawn grouping
+---------------------------------------------------
+local elevatorGroup = Instance.new("Model")
+elevatorGroup.Name   = "ElevatorSpawnGroup"
+elevatorGroup.Parent = Workspace
 
-Certain owners wish to permanently relinquish those rights to a Work for
-the purpose of contributing to a commons of creative, cultural and
-scientific works ("Commons") that the public can reliably and without fear
-of later claims of infringement build upon, modify, incorporate in other
-works, reuse and redistribute as freely as possible in any form whatsoever
-and for any purposes, including without limitation commercial purposes.
-These owners may contribute to the Commons to promote the ideal of a free
-culture and the further production of creative, cultural and scientific
-works, or to gain reputation or greater distribution for their Work in
-part through the use and efforts of others.
+local function updateElevatorSpawnGroup()
+    local currentMap = Workspace:FindFirstChild("CurrentMap")
+    if not currentMap then return end
+    local spawnFolder = currentMap:FindFirstChild("ElevatorSpawns")
+    if not spawnFolder then return end
+    local spawnPart = spawnFolder:FindFirstChild("ElevatorSpawn")
+    if spawnPart and spawnPart:IsA("BasePart") then
+        spawnPart.Parent = elevatorGroup
+    end
+end
 
-For these and/or other purposes and motivations, and without any
-expectation of additional consideration or compensation, the person
-associating CC0 with a Work (the "Affirmer"), to the extent that he or she
-is an owner of Copyright and Related Rights in the Work, voluntarily
-elects to apply CC0 to the Work and publicly distribute the Work under its
-terms, with knowledge of his or her Copyright and Related Rights in the
-Work and the meaning and intended legal effect of CC0 on those rights.
+---------------------------------------------------
+-- Helpers
+---------------------------------------------------
+local function getFirstBasePart(obj)
+    if obj:IsA("BasePart") then return obj end
+    for _, c in ipairs(obj:GetChildren()) do
+        local p = getFirstBasePart(c)
+        if p then return p end
+    end
+    return nil
+end
 
-1. Copyright and Related Rights. A Work made available under CC0 may be
-protected by copyright and related or neighboring rights ("Copyright and
-Related Rights"). Copyright and Related Rights include, but are not
-limited to, the following:
+local function computeTransparency(dist)
+    if dist <= localDimDistance then return 0.95 end
+    if dist >= localFullDistance then return 0 end
+    return 0.95 - ((dist - localDimDistance)/(localFullDistance - localDimDistance))*0.95
+end
 
-  i. the right to reproduce, adapt, distribute, perform, display,
-     communicate, and translate a Work;
- ii. moral rights retained by the original author(s) and/or performer(s);
-iii. publicity and privacy rights pertaining to a person's image or
-     likeness depicted in a Work;
- iv. rights protecting against unfair competition in regards to a Work,
-     subject to the limitations in paragraph 4(a), below;
-  v. rights protecting the extraction, dissemination, use and reuse of data
-     in a Work;
- vi. database rights (such as those arising under Directive 96/9/EC of the
-     European Parliament and of the Council of 11 March 1996 on the legal
-     protection of databases, and under any national implementation
-     thereof, including any amended or successor version of such
-     directive); and
-vii. other similar, equivalent or corresponding rights throughout the
-     world based on applicable law or treaty, and any national
-     implementations thereof.
+local function refreshHighlight(container, old, color)
+    if old then old:Destroy() end
+    local hl = Instance.new("Highlight")
+    hl.Adornee            = container
+    hl.FillColor          = color
+    hl.OutlineColor       = Color3.new(1,1,1)
+    hl.FillTransparency   = 1
+    hl.OutlineTransparency= 1
+    hl.DepthMode          = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent             = Workspace
+    return hl
+end
 
-2. Waiver. To the greatest extent permitted by, but not in contravention
-of, applicable law, Affirmer hereby overtly, fully, permanently,
-irrevocably and unconditionally waives, abandons, and surrenders all of
-Affirmer's Copyright and Related Rights and associated claims and causes
-of action, whether now known or unknown (including existing as well as
-future claims and causes of action), in the Work (i) in all territories
-worldwide, (ii) for the maximum duration provided by applicable law or
-treaty (including future time extensions), (iii) in any current or future
-medium and for any number of copies, and (iv) for any purpose whatsoever,
-including without limitation commercial, advertising or promotional
-purposes (the "Waiver"). Affirmer makes the Waiver for the benefit of each
-member of the public at large and to the detriment of Affirmer's heirs and
-successors, fully intending that such Waiver shall not be subject to
-revocation, rescission, cancellation, termination, or any other legal or
-equitable action to disrupt the quiet enjoyment of the Work by the public
-as contemplated by Affirmer's express Statement of Purpose.
+---------------------------------------------------
+-- Highlight groups
+---------------------------------------------------
+local highlightGroups = {}
+local modelToGroup    = {}
 
-3. Public License Fallback. Should any part of the Waiver for any reason
-be judged legally invalid or ineffective under applicable law, then the
-Waiver shall be preserved to the maximum extent permitted taking into
-account Affirmer's express Statement of Purpose. In addition, to the
-extent the Waiver is so judged Affirmer hereby grants to each affected
-person a royalty-free, non transferable, non sublicensable, non exclusive,
-irrevocable and unconditional license to exercise Affirmer's Copyright and
-Related Rights in the Work (i) in all territories worldwide, (ii) for the
-maximum duration provided by applicable law or treaty (including future
-time extensions), (iii) in any current or future medium and for any number
-of copies, and (iv) for any purpose whatsoever, including without
-limitation commercial, advertising or promotional purposes (the
-"License"). The License shall be deemed effective as of the date CC0 was
-applied by Affirmer to the Work. Should any part of the License for any
-reason be judged legally invalid or ineffective under applicable law, such
-partial invalidity or ineffectiveness shall not invalidate the remainder
-of the License, and in such case Affirmer hereby affirms that he or she
-will not (i) exercise any of his or her remaining Copyright and Related
-Rights in the Work or (ii) assert any associated claims and causes of
-action with respect to the Work, in either case contrary to Affirmer's
-express Statement of Purpose.
+local function getColorKey(c)
+    return ("%d_%d_%d"):format(c.R*255, c.G*255, c.B*255)
+end
 
-4. Limitations and Disclaimers.
+local function getHighlightBaseColor(m)
+    if not m:IsA("Model") then return nil end
+    if storedEntityNames[m.Name] then return Color3.fromRGB(255,0,0) end
+    if m.Name=="Battery" then return Color3.fromRGB(255,165,0) end
+    local ents = Workspace:FindFirstChild("Entities")
+    if ents and m:IsDescendantOf(ents) then
+        return Color3.fromRGB(255,0,0)
+    elseif m.Name=="Code" or m.Name=="ColourCode" or m.Name:match("UpgradeTerminal") then
+        return Color3.fromRGB(128,0,128)
+    elseif m.Name=="InfoEnvy" then
+        return Color3.fromRGB(0,255,0)
+    end
+    return nil
+end
 
- a. No trademark or patent rights held by Affirmer are waived, abandoned,
-    surrendered, licensed or otherwise affected by this document.
- b. Affirmer offers the Work as-is and makes no representations or
-    warranties of any kind concerning the Work, express, implied,
-    statutory or otherwise, including without limitation warranties of
-    title, merchantability, fitness for a particular purpose, non
-    infringement, or the absence of latent or other defects, accuracy, or
-    the present or absence of errors, whether or not discoverable, all to
-    the greatest extent permissible under applicable law.
- c. Affirmer disclaims responsibility for clearing rights of other persons
-    that may apply to the Work or any use thereof, including without
-    limitation any person's Copyright and Related Rights in the Work.
-    Further, Affirmer disclaims responsibility for obtaining any necessary
-    consents, permissions or other rights required for any use of the
-    Work.
- d. Affirmer understands and acknowledges that Creative Commons is not a
-    party to this document and has no duty or obligation with respect to
-    this CC0 or use of the Work.
+local function getOrCreateGroup(color)
+    local key = getColorKey(color)
+    if not highlightGroups[key] then
+        local container = Instance.new("Model")
+        container.Name   = "HighlightGroup_"..key
+        container.Parent = Workspace
+        local hl = refreshHighlight(container, nil, color)
+        highlightGroups[key] = {
+            container = container,
+            highlight = hl,
+            baseColor = color,
+            models    = {}
+        }
+    end
+    return highlightGroups[key]
+end
+
+local function addModelToGroup(m)
+    local c = getHighlightBaseColor(m)
+    if not c then return end
+    local grp = getOrCreateGroup(c)
+    if m.Parent ~= grp.container then
+        m.Parent = grp.container
+        grp.highlight = refreshHighlight(grp.container, grp.highlight, grp.baseColor)
+    end
+    grp.models[m]   = true
+    modelToGroup[m] = grp
+
+    local cv = m:FindFirstChild("Completed")
+    if cv and cv:IsA("BoolValue") then
+        if cv.Value then
+            grp.models[m]   = nil
+            modelToGroup[m] = nil
+            m.Parent        = Workspace
+            grp.highlight   = refreshHighlight(grp.container, grp.highlight, grp.baseColor)
+            return
+        end
+        if not cv:GetAttribute("Conn") then
+            cv.Changed:Connect(function(val)
+                if val and modelToGroup[m] then
+                    local g = modelToGroup[m]
+                    g.models[m]    = nil
+                    modelToGroup[m] = nil
+                    m.Parent        = Workspace
+                    g.highlight     = refreshHighlight(g.container, g.highlight, g.baseColor)
+                end
+            end)
+            cv:SetAttribute("Conn", true)
+        end
+    end
+end
+
+---------------------------------------------------
+-- UntitledTask grouping
+---------------------------------------------------
+local untitledGroup      = Instance.new("Model")
+untitledGroup.Name       = "UntitledTaskGroup"
+untitledGroup.Parent     = Workspace
+local untitledHighlight  = refreshHighlight(untitledGroup, nil, Color3.new(0,1,0))
+
+local completedGroup     = Instance.new("Model")
+completedGroup.Name      = "CompletedUntitledTaskGroup"
+completedGroup.Parent    = Workspace
+local completedHighlight = refreshHighlight(completedGroup, nil, Color3.new(0,0,0))
+
+local groupedTasks = {}
+
+local function addUntitled(m)
+    if groupedTasks[m] then return end
+    if m.Name ~= "UntitledTask" then return end
+    m.Parent        = untitledGroup
+    groupedTasks[m] = true
+end
+
+---------------------------------------------------
+-- Initial scan & listener
+---------------------------------------------------
+local function processModel(m)
+    if not m then return end
+    if m:IsA("Model") then
+        local ents = Workspace:FindFirstChild("Entities")
+        if ents and m:IsDescendantOf(ents) then
+            storedEntityNames[m.Name] = true
+        end
+        if m.Name=="UntitledTask" then
+            addUntitled(m)
+        else
+            addModelToGroup(m)
+        end
+    end
+    updateElevatorSpawnGroup()
+end
+
+for _, m in ipairs(Workspace:GetDescendants()) do processModel(m) end
+Workspace.DescendantAdded:Connect(function(m)
+    task.wait(0.1)
+    processModel(m)
+end)
+
+---------------------------------------------------
+-- Periodic verify (5s)
+---------------------------------------------------
+spawn(function()
+    while true do
+        task.wait(5)
+        updateElevatorSpawnGroup()
+        local designated = {
+            [untitledGroup]  = true,
+            [completedGroup] = true,
+            [elevatorGroup]  = true
+        }
+        for _, g in pairs(highlightGroups) do designated[g.container] = true end
+
+        for _, m in ipairs(Workspace:GetDescendants()) do
+            if m:IsA("Model") and not designated[m] then
+                if m.Name=="UntitledTask" then
+                    local cv = m:FindFirstChild("Completed")
+                    if cv and cv.Value then
+                        m.Parent = completedGroup
+                        completedHighlight = refreshHighlight(completedGroup, completedHighlight, Color3.new(0,0,0))
+                    else
+                        m.Parent = untitledGroup
+                    end
+                else
+                    local c = getHighlightBaseColor(m)
+                    if c then
+                        local g = getOrCreateGroup(c)
+                        m.Parent    = g.container
+                        g.highlight = refreshHighlight(g.container, g.highlight, g.baseColor)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+---------------------------------------------------
+-- Dynamic transparency & cleanup
+---------------------------------------------------
+RunService.Heartbeat:Connect(function()
+    if not humanoidRootPart then return end
+
+    for _, g in pairs(highlightGroups) do
+        local closestDist = math.huge
+        for m in pairs(g.models) do
+            if m.Parent == g.container then
+                local p = m.PrimaryPart or getFirstBasePart(m)
+                if p then
+                    local d = (humanoidRootPart.Position - p.Position).Magnitude
+                    if d > maxHighlightDistance then
+                        g.models[m] = nil
+                        m.Parent    = Workspace
+                        g.highlight = refreshHighlight(g.container, g.highlight, g.baseColor)
+                    else
+                        closestDist = math.min(closestDist, d)
+                    end
+                end
+            end
+        end
+        if closestDist == math.huge then
+            g.highlight.FillTransparency   = 1
+            g.highlight.OutlineTransparency = 1
+        else
+            local t = computeTransparency(closestDist)
+            g.highlight.FillTransparency   = t
+            g.highlight.OutlineTransparency = t
+        end
+    end
+
+    local closestT, found = math.huge, false
+    for _, m in ipairs(untitledGroup:GetChildren()) do
+        if m:IsA("Model") then
+            local cv = m:FindFirstChild("Completed")
+            if cv and cv.Value then
+                groupedTasks[m] = nil
+                m.Parent        = completedGroup
+                completedHighlight = refreshHighlight(completedGroup, completedHighlight, Color3.new(0,0,0))
+            else
+                local p = m.PrimaryPart or getFirstBasePart(m)
+                if p then
+                    found = true
+                    local d = (humanoidRootPart.Position - p.Position).Magnitude
+                    closestT = math.min(closestT, d)
+                    if d > maxHighlightDistance then
+                        groupedTasks[m] = nil
+                        m.Parent        = Workspace
+                    end
+                end
+            end
+        end
+    end
+    if found then
+        local t = computeTransparency(closestT)
+        untitledHighlight.FillTransparency   = t
+        untitledHighlight.OutlineTransparency = t
+    else
+        untitledHighlight.FillTransparency   = 1
+        untitledHighlight.OutlineTransparency = 1
+    end
+end)
+
+---------------------------------------------------
+-- Teleport helper using just UntitledTaskGroup & HighlightGroup_255_0_0
+---------------------------------------------------
+local function teleportToSafeTask()
+    local taskGroup   = workspace:FindFirstChild("UntitledTaskGroup")
+    local entityGroup = workspace:FindFirstChild("HighlightGroup_255_0_0")
+    if not taskGroup then return end
+
+    -- collect entity parts
+    local entities = {}
+    if entityGroup then
+        for _, em in ipairs(entityGroup:GetChildren()) do
+            local ep = em.PrimaryPart or getFirstBasePart(em)
+            if ep then table.insert(entities, ep) end
+        end
+    end
+
+    -- split tasks
+    local nearList, pipeList = {}, {}
+    local rootPos = humanoidRootPart.Position
+
+    for _, m in ipairs(taskGroup:GetChildren()) do
+        if m:IsA("Model") and m.Name=="UntitledTask" then
+            local cv = m:FindFirstChild("Completed")
+            if not (cv and cv.Value) then
+                local p = m.PrimaryPart or getFirstBasePart(m)
+                if p then
+                    local safe = true
+                    for _, ep in ipairs(entities) do
+                        if (p.Position - ep.Position).Magnitude < entityProximityThreshold then
+                            safe = false
+                            break
+                        end
+                    end
+                    if safe then
+                        local hasPipe = false
+                        local cos = m:FindFirstChild("Cosmetic")
+                        if cos then
+                            for _, c in ipairs(cos:GetChildren()) do
+                                if c.Name:find("Decor_Pipes") then
+                                    hasPipe = true
+                                    break
+                                end
+                            end
+                        end
+                        local entry = { part = p, dist = (rootPos - p.Position).Magnitude }
+                        if hasPipe then
+                            table.insert(pipeList, entry)
+                        else
+                            table.insert(nearList, entry)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local function pickClosest(list)
+        local best, bd = nil, math.huge
+        for _, e in ipairs(list) do
+            if e.dist < bd then
+                bd, best = e.dist, e.part
+            end
+        end
+        return best
+    end
+
+    local chosen = pickClosest(nearList) or pickClosest(pipeList)
+    if chosen then
+        humanoidRootPart.CFrame = CFrame.new(chosen.Position + Vector3.new(0,5,0))
+    end
+end
+
+---------------------------------------------------
+-- X toggles auto sequence
+---------------------------------------------------
+local running = false
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp or input.KeyCode~=Enum.KeyCode.X then return end
+    running = not running
+    if running then
+        updateElevatorSpawnGroup()
+
+        -- start E-spam immediately
+        task.spawn(function()
+            while running do
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                VirtualInputManager:SendKeyEvent(false,Enum.KeyCode.E,false,game)
+                task.wait(0.05)
+            end
+        end)
+
+        -- first grab Codes and UpgradeTerminals
+        task.spawn(function()
+            for _, cm in ipairs(Workspace:GetDescendants()) do
+                if not running then return end
+                if cm:IsA("Model") and (
+                   cm.Name=="Code"
+                or cm.Name=="ColourCode"
+                or cm.Name:match("UpgradeTerminal")
+                ) then
+                    local p = cm.PrimaryPart or getFirstBasePart(cm)
+                    if p then
+                        humanoidRootPart.CFrame = CFrame.new(p.Position + Vector3.new(0,5,0))
+                        local prompt = cm:FindFirstChildWhichIsA("ProximityPrompt", true)
+                        if prompt then
+                            prompt:InputHoldBegin()
+                            task.wait(0.2)
+                            prompt:InputHoldEnd()
+                        else
+                            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                            task.wait(0.2)
+                            VirtualInputManager:SendKeyEvent(false,Enum.KeyCode.E,false,game)
+                        end
+                        task.wait(0.1)
+                    end
+                end
+            end
+
+            -- then loop teleport to safe tasks
+            while running do
+                teleportToSafeTask()
+                task.wait(0.1)
+            end
+        end)
+    else
+        -- on disable: teleport to ElevatorSpawn or survival fallback
+        local spawnPart = elevatorGroup:FindFirstChild("ElevatorSpawn")
+        if spawnPart and spawnPart:IsA("BasePart") then
+            humanoidRootPart.CFrame = CFrame.new(spawnPart.Position + Vector3.new(0,5,0))
+        else
+            local sum, cnt = Vector3.new(), 0
+            for _, g in pairs(highlightGroups) do
+                for em in pairs(g.models) do
+                    local ep = em.PrimaryPart or getFirstBasePart(em)
+                    if ep then sum, cnt = sum+ep.Position, cnt+1 end
+                end
+            end
+            local center = cnt>0 and (sum/cnt) or humanoidRootPart.Position
+            local dir = (humanoidRootPart.Position - center).Unit
+            if dir.Magnitude==0 then dir=Vector3.new(0,1,0) end
+            humanoidRootPart.CFrame = CFrame.new(center + dir*survivalTeleportDistance)
+        end
+    end
+end)
+
+---------------------------------------------------
+-- Respawn handling
+---------------------------------------------------
+localPlayer.CharacterAdded:Connect(function(c)
+    character        = c
+    humanoidRootPart = c:WaitForChild("HumanoidRootPart")
+end)
+
+print("[IntegratedHighlightScript] Ready! Grabs Code/UpgradeTerminal (0.2s), spams E (0.05s), then safe-task teleport.")
